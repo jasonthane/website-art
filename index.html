@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Digital Art</title>
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+            }
+            canvas {
+                display: block;
+                width: 100vw;
+                height: 100vh;
+                background-color: white;
+            }
+        </style>
+    </head>
+    <body>
+        <canvas id="canvas"></canvas>
+        <script type="importmap">
+            {
+                "imports": {
+                    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                    "delaunator": "https://cdn.jsdelivr.net/npm/delaunator@5.0.0/+esm"
+                }
+            }
+        </script>
+        <script type="module">
+            import * as THREE from "three";
+            import Delaunator from "delaunator";
+
+            const canvas = document.getElementById("canvas");
+
+            function resizeCanvas() {
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+
+                renderer.setSize(width, height, false);
+                camera.aspect = width / height;
+                camera.updateProjectionMatrix();
+            }
+
+            // Update size when window is resized
+            window.addEventListener("resize", resizeCanvas);
+
+            // Create scene
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+
+            // Create camera
+            const camera = new THREE.PerspectiveCamera(
+                75,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                1000,
+            );
+            camera.position.z = 15;
+
+            // Create renderer
+            const renderer = new THREE.WebGLRenderer({
+                canvas: canvas,
+                antialias: true,
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight, false);
+            renderer.setPixelRatio(window.devicePixelRatio || 1);
+
+            // Calculate visible area at z=0 based on camera FOV
+            const vFOV = (camera.fov * Math.PI) / 180;
+            const viewHeight = 2 * Math.tan(vFOV / 2) * camera.position.z;
+            const viewWidth = viewHeight * camera.aspect;
+
+            // Generate points for Delaunay triangulation
+            const numPoints = 1600; // Adjust this for more/fewer triangles
+            const randomness = 0.5; // 0.0 = perfectly even grid, 1.0 = completely random
+            const points = [];
+
+            // Add corner points to ensure full coverage
+            const padding = 2;
+            points.push(
+                [-viewWidth / 2 - padding, -viewHeight / 2 - padding],
+                [viewWidth / 2 + padding, -viewHeight / 2 - padding],
+                [viewWidth / 2 + padding, viewHeight / 2 + padding],
+                [-viewWidth / 2 - padding, viewHeight / 2 + padding],
+            );
+
+            // Add edge points for better coverage
+            const edgePoints = 20;
+            for (let i = 0; i < edgePoints; i++) {
+                const t = i / edgePoints;
+                const x = -viewWidth / 2 + t * viewWidth;
+                const y = -viewHeight / 2 + t * viewHeight;
+                points.push(
+                    [x, -viewHeight / 2 - padding], // bottom edge
+                    [x, viewHeight / 2 + padding], // top edge
+                    [-viewWidth / 2 - padding, y], // left edge
+                    [viewWidth / 2 + padding, y], // right edge
+                );
+            }
+
+            // Generate interior points with controllable randomness
+            // Using jittered grid for better distribution control
+            const gridSize = Math.ceil(Math.sqrt(numPoints));
+            const cellWidth = viewWidth / gridSize;
+            const cellHeight = viewHeight / gridSize;
+
+            for (let i = 0; i < numPoints; i++) {
+                if (randomness === 1.0) {
+                    // Fully random distribution
+                    const x = -viewWidth / 2 + Math.random() * viewWidth;
+                    const y = -viewHeight / 2 + Math.random() * viewHeight;
+                    points.push([x, y]);
+                } else {
+                    // Jittered grid distribution
+                    const gridX = i % gridSize;
+                    const gridY = Math.floor(i / gridSize);
+
+                    // Base position at grid center
+                    const baseX =
+                        -viewWidth / 2 + gridX * cellWidth + cellWidth / 2;
+                    const baseY =
+                        -viewHeight / 2 + gridY * cellHeight + cellHeight / 2;
+
+                    // Add jitter controlled by randomness parameter
+                    const jitterX =
+                        (Math.random() - 0.5) * cellWidth * randomness;
+                    const jitterY =
+                        (Math.random() - 0.5) * cellHeight * randomness;
+
+                    const x = baseX + jitterX;
+                    const y = baseY + jitterY;
+
+                    if (gridY < gridSize) {
+                        // Only add if within grid bounds
+                        points.push([x, y]);
+                    }
+                }
+            }
+
+            // Perform Delaunay triangulation
+            const delaunay = Delaunator.from(points);
+
+            // Create triangles from Delaunay triangulation
+            for (let i = 0; i < delaunay.triangles.length; i += 3) {
+                const p1Index = delaunay.triangles[i];
+                const p2Index = delaunay.triangles[i + 1];
+                const p3Index = delaunay.triangles[i + 2];
+
+                const p1 = points[p1Index];
+                const p2 = points[p2Index];
+                const p3 = points[p3Index];
+
+                // Create triangle geometry
+                const geometry = new THREE.BufferGeometry();
+                const vertices = new Float32Array([
+                    p1[0],
+                    p1[1],
+                    0,
+                    p2[0],
+                    p2[1],
+                    0,
+                    p3[0],
+                    p3[1],
+                    0,
+                ]);
+                geometry.setAttribute(
+                    "position",
+                    new THREE.BufferAttribute(vertices, 3),
+                );
+
+                // Random green shade
+                const lightness = 0.3 + Math.random() * 0.4;
+                const color = new THREE.Color();
+                color.setHSL(0.33, 1.0, lightness);
+                const material = new THREE.MeshBasicMaterial({
+                    color: color,
+                    side: THREE.DoubleSide,
+                });
+                const triangle = new THREE.Mesh(geometry, material);
+                scene.add(triangle);
+            }
+
+            // Setup raycasting for click detection
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+            const animatingTriangles = [];
+
+            function onMouseClick(event) {
+                // Calculate mouse position in normalized device coordinates (-1 to +1)
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+                // Update the raycaster with the camera and mouse position
+                raycaster.setFromCamera(mouse, camera);
+
+                // Find intersected objects
+                const intersects = raycaster.intersectObjects(scene.children);
+
+                if (intersects.length > 0) {
+                    // Get the first (closest) intersected object
+                    const clickedTriangle = intersects[0].object;
+
+                    // Don't animate if already animating
+                    if (clickedTriangle.userData.isAnimating) return;
+
+                    // Mark as animating
+                    clickedTriangle.userData.isAnimating = true;
+
+                    // Store animation properties
+                    clickedTriangle.userData.velocity = {
+                        x: (Math.random() - 0.5) * 0.5,
+                        y: (Math.random() - 0.5) * 0.5,
+                        z: 0.5 + Math.random() * 0.5,
+                    };
+                    clickedTriangle.userData.rotationSpeed = {
+                        x: (Math.random() - 0.5) * 0.1,
+                        y: (Math.random() - 0.5) * 0.1,
+                        z: (Math.random() - 0.5) * 0.1,
+                    };
+
+                    animatingTriangles.push(clickedTriangle);
+                }
+            }
+
+            // Add click event listener
+            window.addEventListener("click", onMouseClick);
+
+            // Animation loop
+            function animate() {
+                requestAnimationFrame(animate);
+
+                // Update animating triangles
+                for (let i = animatingTriangles.length - 1; i >= 0; i--) {
+                    const triangle = animatingTriangles[i];
+
+                    // Move the triangle
+                    triangle.position.x += triangle.userData.velocity.x;
+                    triangle.position.y += triangle.userData.velocity.y;
+                    triangle.position.z += triangle.userData.velocity.z;
+
+                    // Rotate the triangle
+                    triangle.rotation.x += triangle.userData.rotationSpeed.x;
+                    triangle.rotation.y += triangle.userData.rotationSpeed.y;
+                    triangle.rotation.z += triangle.userData.rotationSpeed.z;
+
+                    // Add gravity effect
+                    triangle.userData.velocity.y -= 0.01;
+
+                    // Remove triangle if it's far enough away
+                    if (
+                        triangle.position.z > 50 ||
+                        triangle.position.y < -50
+                    ) {
+                        scene.remove(triangle);
+                        animatingTriangles.splice(i, 1);
+                    }
+                }
+
+                renderer.render(scene, camera);
+            }
+
+            animate();
+        </script>
+    </body>
+</html>
+
