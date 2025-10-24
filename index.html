@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Digital Art</title>
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+            }
+            canvas {
+                display: block;
+                width: 100vw;
+                height: 100vh;
+                background-color: white;
+            }
+        </style>
+    </head>
+    <body>
+        <canvas id="canvas"></canvas>
+        <script type="importmap">
+            {
+                "imports": {
+                    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                    "delaunator": "https://cdn.jsdelivr.net/npm/delaunator@5.0.0/+esm"
+                }
+            }
+        </script>
+        <script type="module">
+            import * as THREE from "three";
+            import Delaunator from "delaunator";
+
+            const canvas = document.getElementById("canvas");
+
+            function resizeCanvas() {
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+
+                renderer.setSize(width, height, false);
+                camera.aspect = width / height;
+                camera.updateProjectionMatrix();
+            }
+
+            // Update size when window is resized
+            window.addEventListener("resize", resizeCanvas);
+
+            // Create scene
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xffffff);
+
+            // Create camera
+            const camera = new THREE.PerspectiveCamera(
+                75,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                1000,
+            );
+            camera.position.z = 15;
+
+            // Create renderer
+            const renderer = new THREE.WebGLRenderer({
+                canvas: canvas,
+                antialias: true,
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight, false);
+            renderer.setPixelRatio(window.devicePixelRatio || 1);
+
+            // Calculate visible area at z=0 based on camera FOV
+            const vFOV = (camera.fov * Math.PI) / 180;
+            const viewHeight = 2 * Math.tan(vFOV / 2) * camera.position.z;
+            const viewWidth = viewHeight * camera.aspect;
+
+            // Generate points for Delaunay triangulation
+            const numPoints = 1600; // Adjust this for more/fewer triangles
+            const randomness = 0.5; // 0.0 = perfectly even grid, 1.0 = completely random
+            const points = [];
+
+            // Define the curve formula in one place: y = (20/(x+4))-1
+            // x is in screen coordinates (lower left = 0,0)
+            function curveFormula(x) {
+                return 30 / (x + 4) - 1;
+            }
+
+            // Function to check if a point is below the curve
+            function isBelowCurve(threeX, threeY) {
+                // Convert from Three.js coordinates (center = 0,0) to screen coordinates (lower left = 0,0)
+                const screenX = threeX + viewWidth / 2;
+                const screenY = threeY + viewHeight / 2;
+
+                // Check if point is below the curve
+                // Avoid the asymptote at x = -4
+                if (screenX <= -3.9) return true; // Avoid division by very small numbers
+                const curveY = curveFormula(screenX);
+                return screenY <= curveY;
+            }
+
+            // Add corner points to ensure full coverage (only if below curve)
+            const padding = 2;
+            const corners = [
+                [-viewWidth / 2 - padding, -viewHeight / 2 - padding],
+                [viewWidth / 2 + padding, -viewHeight / 2 - padding],
+                [viewWidth / 2 + padding, viewHeight / 2 + padding],
+                [-viewWidth / 2 - padding, viewHeight / 2 + padding],
+            ];
+            
+            for (const [x, y] of corners) {
+                if (isBelowCurve(x, y)) {
+                    points.push([x, y]);
+                }
+            }
+
+            // Add edge points for better coverage
+            const edgePoints = 20;
+            for (let i = 0; i < edgePoints; i++) {
+                const t = i / edgePoints;
+                const x = -viewWidth / 2 + t * viewWidth;
+                const y = -viewHeight / 2 + t * viewHeight;
+                
+                // Bottom edge - always add
+                points.push([x, -viewHeight / 2 - padding]);
+                
+                // Top edge - only if below curve
+                if (isBelowCurve(x, viewHeight / 2 + padding)) {
+                    points.push([x, viewHeight / 2 + padding]);
+                }
+                
+                // Left edge - only if below curve
+                if (isBelowCurve(-viewWidth / 2 - padding, y)) {
+                    points.push([-viewWidth / 2 - padding, y]);
+                }
+                
+                // Right edge - only if below curve
+                if (isBelowCurve(viewWidth / 2 + padding, y)) {
+                    points.push([viewWidth / 2 + padding, y]);
+                }
+            }
+
+            // Generate interior points with controllable randomness
+            // Using jittered grid for better distribution control
+            const gridSize = Math.ceil(Math.sqrt(numPoints));
+            const cellWidth = viewWidth / gridSize;
+            const cellHeight = viewHeight / gridSize;
+
+            for (let i = 0; i < numPoints; i++) {
+                if (randomness === 1.0) {
+                    // Fully random distribution
+                    const x = -viewWidth / 2 + Math.random() * viewWidth;
+                    const y = -viewHeight / 2 + Math.random() * viewHeight;
+                    // Only add if below the curve
+                    if (isBelowCurve(x, y)) {
+                        points.push([x, y]);
+                    }
+                } else {
+                    // Jittered grid distribution
+                    const gridX = i % gridSize;
+                    const gridY = Math.floor(i / gridSize);
+
+                    // Base position at grid center
+                    const baseX =
+                        -viewWidth / 2 + gridX * cellWidth + cellWidth / 2;
+                    const baseY =
+                        -viewHeight / 2 + gridY * cellHeight + cellHeight / 2;
+
+                    // Add jitter controlled by randomness parameter
+                    const jitterX =
+                        (Math.random() - 0.5) * cellWidth * randomness;
+                    const jitterY =
+                        (Math.random() - 0.5) * cellHeight * randomness;
+
+                    const x = baseX + jitterX;
+                    const y = baseY + jitterY;
+
+                    if (gridY < gridSize) {
+                        // Only add if within grid bounds AND below the curve
+                        if (isBelowCurve(x, y)) {
+                            points.push([x, y]);
+                        }
+                    }
+                }
+            }
+
+            // Perform Delaunay triangulation
+            const delaunay = Delaunator.from(points);
+
+            // Create triangles from Delaunay triangulation
+            for (let i = 0; i < delaunay.triangles.length; i += 3) {
+                const p1Index = delaunay.triangles[i];
+                const p2Index = delaunay.triangles[i + 1];
+                const p3Index = delaunay.triangles[i + 2];
+
+                const p1 = points[p1Index];
+                const p2 = points[p2Index];
+                const p3 = points[p3Index];
+
+                // Calculate the center (centroid) of the triangle
+                const centerX = (p1[0] + p2[0] + p3[0]) / 3;
+                const centerY = (p1[1] + p2[1] + p3[1]) / 3;
+
+                // Skip triangle if center is above the curve
+                if (!isBelowCurve(centerX, centerY)) {
+                    continue;
+                }
+
+                // Create triangle geometry
+                const geometry = new THREE.BufferGeometry();
+                const vertices = new Float32Array([
+                    p1[0],
+                    p1[1],
+                    0,
+                    p2[0],
+                    p2[1],
+                    0,
+                    p3[0],
+                    p3[1],
+                    0,
+                ]);
+                geometry.setAttribute(
+                    "position",
+                    new THREE.BufferAttribute(vertices, 3),
+                );
+
+                // Random green shade
+                const lightness = 0.3 + Math.random() * 0.4;
+                const color = new THREE.Color();
+                color.setHSL(0.33, 1.0, lightness);
+                const material = new THREE.MeshBasicMaterial({
+                    color: color,
+                    side: THREE.DoubleSide,
+                });
+                const triangle = new THREE.Mesh(geometry, material);
+                
+                // Store original vertices in screen space for mirroring calculation
+                triangle.userData.originalVertices = [
+                    { x: p1[0], y: p1[1] },
+                    { x: p2[0], y: p2[1] },
+                    { x: p3[0], y: p3[1] },
+                ];
+                
+                // Calculate mirrored vertices
+                // Mirror from bottom-left to top-right by negating distances
+                // In screen space: if point is at (dx, dy) from bottom-left,
+                // mirrored point is at (viewWidth - dx, viewHeight - dy) from bottom-left
+                // Which in Three.js coords is: (viewWidth/2 - dx, viewHeight/2 - dy) - (viewWidth/2, viewHeight/2)
+                // = (-dx, -dy) where dx, dy are the Three.js coordinates
+                triangle.userData.mirroredVertices = [
+                    { x: -p1[0], y: -p1[1] },
+                    { x: -p2[0], y: -p2[1] },
+                    { x: -p3[0], y: -p3[1] },
+                ];
+                
+                scene.add(triangle);
+            }
+            
+            // Collect all triangles (excluding the curve line)
+            const allTriangles = scene.children.filter(
+                (obj) => obj.type === "Mesh" && obj.geometry.attributes.position.count === 3
+            );
+
+            // Plot y = 1/x with lower left corner as (0,0)
+            // Convert from screen space (lower left = 0,0) to Three.js space (center = 0,0)
+            function screenToThreeJS(screenX, screenY) {
+                return {
+                    x: screenX - viewWidth / 2,
+                    y: screenY - viewHeight / 2,
+                };
+            }
+
+            // Generate points for the curve
+            const curvePoints = [];
+            const numCurvePoints = 500;
+            const minX = 0.1; // Start from a positive x value
+            const maxX = viewWidth;
+
+            for (let i = 0; i < numCurvePoints; i++) {
+                const screenX = minX + (i / numCurvePoints) * (maxX - minX);
+                const screenY = curveFormula(screenX);
+
+                // Only plot if y is within bounds
+                if (screenY >= 0 && screenY <= viewHeight) {
+                    const threeCoords = screenToThreeJS(screenX, screenY);
+                    curvePoints.push(
+                        new THREE.Vector3(threeCoords.x, threeCoords.y, 0.1),
+                    );
+                }
+            }
+
+            // Create the line geometry
+            const curveGeometry = new THREE.BufferGeometry().setFromPoints(
+                curvePoints,
+            );
+            const curveMaterial = new THREE.LineBasicMaterial({
+                color: 0xff0000,
+                linewidth: 3,
+            });
+            const curveLine = new THREE.Line(curveGeometry, curveMaterial);
+            curveLine.visible = false; // Hide the red line
+            scene.add(curveLine);
+
+            // Setup global animation state
+            let animationState = "idle"; // idle, animating
+            let animationStartTime = 0;
+            const animationDuration = 2000; // 2 seconds in milliseconds
+            const curvature = 0.0; // 0.0 = straight line, 1.0 = maximum curve, can go higher
+
+            // Setup raycasting for click detection
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+
+            function onMouseClick(event) {
+                // Calculate mouse position in normalized device coordinates (-1 to +1)
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+                // Update the raycaster with the camera and mouse position
+                raycaster.setFromCamera(mouse, camera);
+
+                // Find intersected objects
+                const intersects = raycaster.intersectObjects(allTriangles);
+
+                if (intersects.length > 0 && animationState === "idle") {
+                    // Start animation
+                    animationState = "animating";
+                    animationStartTime = Date.now();
+                    
+                    // Give each triangle a random curved path to follow
+                    allTriangles.forEach((triangle) => {
+                        // Random mid-point offset for chaotic curved path (scaled by curvature)
+                        triangle.userData.midpointOffset = {
+                            x: (Math.random() - 0.5) * 8 * curvature,
+                            y: (Math.random() - 0.5) * 8 * curvature,
+                            z: (Math.random() - 0.5) * 3 * curvature,
+                        };
+                        triangle.userData.rotationSpeed = {
+                            x: (Math.random() - 0.5) * 0.08,
+                            y: (Math.random() - 0.5) * 0.08,
+                            z: (Math.random() - 0.5) * 0.08,
+                        };
+                        // Store start position
+                        triangle.userData.startPos = {
+                            x: triangle.position.x,
+                            y: triangle.position.y,
+                            z: triangle.position.z,
+                        };
+                        triangle.userData.startRotation = {
+                            x: triangle.rotation.x,
+                            y: triangle.rotation.y,
+                            z: triangle.rotation.z,
+                        };
+                    });
+                }
+            }
+
+            // Add click event listener
+            window.addEventListener("click", onMouseClick);
+
+            // Easing function for smooth animation
+            function easeInOutCubic(t) {
+                return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+            }
+
+            // Animation loop
+            function animate() {
+                requestAnimationFrame(animate);
+
+                const currentTime = Date.now();
+
+                if (animationState === "animating") {
+                    const elapsed = currentTime - animationStartTime;
+                    const progress = Math.min(elapsed / animationDuration, 1);
+                    const easedProgress = easeInOutCubic(progress);
+
+                    allTriangles.forEach((triangle) => {
+                        const start = triangle.userData.startPos;
+                        const midOffset = triangle.userData.midpointOffset;
+                        
+                        // Use quadratic bezier curve for chaotic path
+                        // Control point is offset from the midpoint between start and end
+                        const t = easedProgress;
+                        const invT = 1 - t;
+                        
+                        // For position, use a parabolic arc through a random midpoint
+                        // The arc peaks at t=0.5, creating chaotic movement
+                        const arcFactor = Math.sin(t * Math.PI); // Peaks at 0.5
+                        
+                        triangle.position.x = start.x * invT + midOffset.x * arcFactor;
+                        triangle.position.y = start.y * invT + midOffset.y * arcFactor;
+                        triangle.position.z = start.z * invT + midOffset.z * arcFactor;
+
+                        // Interpolate vertices to their mirrored positions
+                        const origVerts = triangle.userData.originalVertices;
+                        const mirrorVerts = triangle.userData.mirroredVertices;
+                        const positionAttr = triangle.geometry.attributes.position;
+                        
+                        for (let i = 0; i < 3; i++) {
+                            const orig = origVerts[i];
+                            const mirror = mirrorVerts[i];
+                            
+                            // Interpolate from original to mirrored
+                            const x = orig.x + (mirror.x - orig.x) * easedProgress;
+                            const y = orig.y + (mirror.y - orig.y) * easedProgress;
+                            
+                            positionAttr.setXYZ(i, x, y, 0);
+                        }
+                        positionAttr.needsUpdate = true;
+
+                        // Chaotic rotation that slows down toward the end
+                        const rotIntensity = Math.sin(t * Math.PI); // Peaks in middle, slows at ends
+                        triangle.rotation.x += triangle.userData.rotationSpeed.x * rotIntensity;
+                        triangle.rotation.y += triangle.userData.rotationSpeed.y * rotIntensity;
+                        triangle.rotation.z += triangle.userData.rotationSpeed.z * rotIntensity;
+                        
+                        // Gradually return rotation to zero
+                        triangle.rotation.x *= (1 - easedProgress * 0.05);
+                        triangle.rotation.y *= (1 - easedProgress * 0.05);
+                        triangle.rotation.z *= (1 - easedProgress * 0.05);
+                    });
+
+                    // Return to idle after animation completes
+                    if (progress >= 1) {
+                        animationState = "idle";
+                    }
+                }
+
+                renderer.render(scene, camera);
+            }
+
+            animate();
+        </script>
+    </body>
+</html>
+
